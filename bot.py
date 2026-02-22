@@ -1,15 +1,17 @@
-# ==== TELEGRAM X MONITOR BOT (FIXED DELETE NOTIF) ====
+# ==== TELEGRAM X MONITOR BOT (FIXED & PROFESSIONAL) ====
 import time, json, os, threading, requests, feedparser
 
+# Variabel Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
 
-# --- KONFIGURASI CHANNEL ---
+# Konfigurasi Channel
 CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
+# Mirror Nitter Cadangan
 NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
 
 def load_data():
@@ -54,17 +56,23 @@ def answer_callback(callback_id, text=None):
 def is_valid_x(username):
     for base_url in NITTER_INSTANCES:
         try:
-            r = requests.get(f"{base_url}/{username}/rss", timeout=5)
+            r = requests.get(f"{base_url}/{username}/rss", timeout=7)
             if r.status_code == 200: return True
         except: continue
     return False
 
+# --- KEYBOARDS ---
 def main_menu():
     return {"keyboard": [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}]], "resize_keyboard": True}
 
 def mode_keyboard(selected):
     def mark(x): return f"✅ {x}" if x in selected else f"❌ {x}"
-    return {"inline_keyboard": [[{"text": mark("posting"), "callback_data": "mode|posting"}], [{"text": mark("reply"), "callback_data": "mode|reply"}], [{"text": mark("repost"), "callback_data": "mode|repost"}], [{"text": "🚀 KONFIRMASI", "callback_data": "done"}]]}
+    return {"inline_keyboard": [
+        [{"text": mark("posting"), "callback_data": "mode|posting"}],
+        [{"text": mark("reply"), "callback_data": "mode|reply"}],
+        [{"text": mark("repost"), "callback_data": "mode|repost"}],
+        [{"text": "🚀 KONFIRMASI", "callback_data": "done"}]
+    ]}
 
 def remove_keyboard(accounts):
     buttons = [[{"text": f"🔴 HAPUS @{acc}", "callback_data": f"del|{acc}"}] for acc in accounts]
@@ -113,7 +121,7 @@ def bot_loop():
                         if is_member(chat_id):
                             answer_callback(cq["id"], "Akses dibuka!")
                             edit(chat_id, msg_id, "✅ **AKSES DIBUKA**", None)
-                            send(chat_id, "Silakan gunakan menu:", main_menu())
+                            send(chat_id, "Selamat datang!", main_menu())
                         else: answer_callback(cq["id"], "Belum join!")
                         continue
 
@@ -130,15 +138,15 @@ def bot_loop():
                         acc = data.split("|")[1]
                         if acc in u["accounts"]:
                             del u["accounts"][acc]; save_data()
-                            # PERBAIKAN: Menambah notifikasi setelah hapus
-                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} tidak lagi dipantau.", None)
+                            # FIXED: Notifikasi setelah hapus akun
+                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} telah dihapus dari sistem.", None)
                     
                     elif data == "done":
                         acc = u.get("temp")
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None; save_data()
-                            send(chat_id, f"✅ @{acc} dipantau!", main_menu())
+                            send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
                     
                     elif data == "cancel":
                         u["state"] = None
@@ -148,6 +156,7 @@ def bot_loop():
                 if "message" not in upd: continue
                 msg = upd["message"]; chat_id = str(msg["chat"]["id"]); text = msg.get("text", "")
                 
+                # Cek Subscribe (Owner dikecualikan)
                 if not is_member(chat_id) and chat_id != str(OWNER_CHAT_ID):
                     send_lock_msg(chat_id); continue
 
@@ -156,28 +165,36 @@ def bot_loop():
 
                 if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
                 elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
+                
+                # ADMIN DASHBOARD
                 elif text == "/admin" and chat_id == str(OWNER_CHAT_ID):
-                    rep = f"👑 *ADMIN*\nUsers: {len(users)}\n"
-                    for uid, ud in users.items(): rep += f"👤 `{uid}`: {list(ud.get('accounts', {}).keys())}\n"
+                    rep = f"👑 *ADMIN DASHBOARD*\n\nUsers: {len(users)}\n"
+                    for uid, ud in users.items():
+                        acc_list = ", ".join(ud.get("accounts", {}).keys()) or "Kosong"
+                        rep += f"👤 `{uid}`: {acc_list}\n"
                     send(chat_id, rep)
+
                 elif text.lower() == "add account":
-                    u["state"] = "add"; send(chat_id, "👤 Masukkan username X:")
+                    u["state"] = "add"; send(chat_id, "👤 Masukkan username X (tanpa @):")
+                
                 elif u["state"] == "add":
                     username = text.replace("@", "").strip().lower()
                     status = send(chat_id, f"🔍 Mengecek @{username}...")
                     if is_valid_x(username):
                         u["temp"] = username; u["modes"] = []; u["state"] = "choose"
-                        edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
+                        edit(chat_id, status.json()['result']['message_id'], f"✅ Akun Ditemukan!\nPilih mode:", mode_keyboard([]))
                     else:
-                        edit(chat_id, status.json()['result']['message_id'], "❌ Tidak ditemukan/sibuk.", None)
+                        edit(chat_id, status.json()['result']['message_id'], "❌ Username tidak ditemukan/sibuk.", None)
                         u["state"] = None
+                
                 elif text == "📋 List Accounts":
                     accs = u.get("accounts", {})
                     txt = "📋 *DAFTAR PANTAUAN:*\n\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong.")
                     send(chat_id, txt)
+                
                 elif text == "❌ Remove Account":
                     accs = list(u.get("accounts", {}).keys())
-                    if not accs: send(chat_id, "📭 Kosong.")
+                    if not accs: send(chat_id, "📭 Daftar pantau kosong.")
                     else: send(chat_id, "🗑️ Pilih akun yang ingin dihapus:", remove_keyboard(accs))
         except: pass
         time.sleep(1)
