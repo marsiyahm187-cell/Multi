@@ -23,20 +23,20 @@ def load_data():
     return {}
 
 def save_data():
-    with open(DATA_FILE, "w") as f: json.dump(users, f)
+    with open(DATA_FILE, "w") as f:
+        json.dump(users, f, indent=4) # Indent agar file json lebih rapi
 
 users = load_data()
 
 # --- FUNGSI IDENTIFIKASI ---
 def is_owner(msg):
-    from_user = msg.get("from", msg.get("chat", {}))
-    chat_id = str(from_user.get("id", ""))
-    username = from_user.get("username", "").lower() if from_user.get("username") else ""
-    # Owner dikenali lewat ID Railway atau Username @njmondeth
-    return chat_id == str(OWNER_CHAT_ID) or username == OWNER_USERNAME.lower()
+    u = msg.get("from", msg.get("chat", {}))
+    cid = str(u.get("id", ""))
+    un = u.get("username", "").lower() if u.get("username") else ""
+    return cid == str(OWNER_CHAT_ID) or un == OWNER_USERNAME.lower()
 
 def is_member(user_id, msg=None):
-    if msg and is_owner(msg): return True # Owner bebas akses
+    if msg and is_owner(msg): return True
     try:
         url = f"{API}/getChatMember"
         params = {"chat_id": CHANNEL_ID, "user_id": user_id}
@@ -50,10 +50,12 @@ def is_member(user_id, msg=None):
 def get_remaining_days(user_id):
     u = users.get(str(user_id))
     if not u or not u.get("join_date"): return 0
-    if u.get("is_vip"): return 999 
+    # Jika VIP, kembalikan angka tinggi agar tidak dianggap habis
+    if u.get("is_vip") is True: return 999 
+    
     jd = datetime.datetime.strptime(u["join_date"], "%Y-%m-%d")
-    remaining = (jd + datetime.timedelta(days=30) - datetime.datetime.now()).days
-    return max(0, remaining)
+    rem = (jd + datetime.timedelta(days=30) - datetime.datetime.now()).days
+    return max(0, rem)
 
 # --- FUNGSI DASAR ---
 def send(chat_id, text, markup=None):
@@ -61,17 +63,11 @@ def send(chat_id, text, markup=None):
     if markup: payload["reply_markup"] = json.dumps(markup)
     return requests.post(f"{API}/sendMessage", data=payload)
 
-def delete_msg(chat_id, msg_id):
-    return requests.post(f"{API}/deleteMessage", data={"chat_id": str(chat_id), "message_id": msg_id})
-
-# --- KEYBOARDS ---
 def main_menu(user_id, owner_access=False):
-    u = users.get(str(user_id), {})
+    u = users.setdefault(str(user_id), {"is_vip": False})
     if owner_access:
-        # Menu Khusus Owner
         kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": "👑 ADMIN DASHBOARD"}]]
     else:
-        # Menu Khusus User
         status = "💎 VIP" if u.get("is_vip") else f"⏳ Trial: {get_remaining_days(user_id)} Hari"
         kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": f"👤 Status: {status}"}]]
     return {"keyboard": kb, "resize_keyboard": True}
@@ -85,29 +81,7 @@ def mode_keyboard(selected):
         [{"text": "🚀 KONFIRMASI", "callback_data": "done"}]
     ]}
 
-# --- MONITORING (PROSES UTAMA) ---
-def monitor():
-    while True:
-        try:
-            for chat_id, data in users.items():
-                days = get_remaining_days(chat_id)
-                target_channel = data.get("target_channel")
-                if not target_channel or (days <= 0 and not data.get("is_vip")): continue
-
-                for acc, cfg in data.get("accounts", {}).items():
-                    for base_url in NITTER_INSTANCES:
-                        feed = feedparser.parse(f"{base_url}/{acc}/rss")
-                        if feed.entries:
-                            post = feed.entries[0]
-                            if cfg.get("last") != post.link:
-                                cfg["last"] = post.link
-                                send(target_channel, f"🔔 *UPDATE @{acc}*\n\n{post.link}")
-                            break
-            save_data()
-        except: pass
-        time.sleep(120)
-
-# --- BOT LOOP (INTERAKSI) ---
+# --- BOT LOOP ---
 def bot_loop():
     offset = None
     while True:
@@ -125,7 +99,8 @@ def bot_loop():
                         acc = u.get("temp_acc")
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
-                            save_data(); delete_msg(chat_id, msg_id)
+                            u.pop("temp_acc", None); save_data()
+                            requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
                             send(chat_id, f"✅ @{acc} dipantau!", main_menu(chat_id, is_owner(cq)))
                     elif data.startswith("mode|"):
                         m = data.split("|")[1]
@@ -138,56 +113,71 @@ def bot_loop():
                 msg = upd["message"]; chat_id = str(msg["chat"]["id"]); text = msg.get("text", "")
                 owner_access = is_owner(msg)
 
-                # Proteksi User Umum
+                # Force Subscribe
                 if not owner_access and not is_member(chat_id, msg):
-                    kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}]]}
-                    send(chat_id, "⚠️ **AKSES TERKUNCI**\nJoin channel kami terlebih dahulu.", kb); continue
+                    kb = {"inline_keyboard": [[{"text": "📢 Join Channel", "url": CHANNEL_LINK}]]}
+                    send(chat_id, "⚠️ **AKSES TERKUNCI**", kb); continue
 
-                u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None})
+                u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None, "is_vip": False})
                 if owner_access: u["is_vip"] = True
 
-                # Alur Forward (Syarat User)
+                # Step 1: Forward Channel
                 if not u.get("target_channel"):
                     if "forward_from_chat" in msg and msg["forward_from_chat"]["type"] == "channel":
                         u["target_channel"] = msg["forward_from_chat"]["id"]
                         u["join_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
-                        save_data(); send(chat_id, "✅ **TERHUBUNG!**", main_menu(chat_id, owner_access))
-                    else: send(chat_id, "📖 Forward pesan channel Anda ke sini."); continue
+                        save_data()
+                        send(chat_id, "✅ **TERHUBUNG!**", main_menu(chat_id, owner_access))
+                    else: send(chat_id, "📖 Forward pesan channel pribadi ke sini."); continue
 
-                # --- LOGIKA KHUSUS OWNER (@njmondeth) ---
-                if text == "👑 ADMIN DASHBOARD" and owner_access:
-                    rep = f"📊 *STATISTIK BOT*\nTotal User: {len(users)}\n\n"
-                    rep += "Gunakan `/setvip [ID]` untuk aktivasi user."
-                    send(chat_id, rep); continue
-
+                # PERINTAH OWNER: /setvip [ID]
                 if text.startswith("/setvip") and owner_access:
-                    t_id = text.split(" ")[1]
-                    if t_id in users:
-                        users[t_id]["is_vip"] = True; save_data()
-                        send(chat_id, f"✅ User `{t_id}` menjadi VIP."); send(t_id, "💎 VIP Aktif!")
+                    parts = text.split(" ")
+                    if len(parts) > 1:
+                        target_id = parts[1].strip()
+                        if target_id in users:
+                            users[target_id]["is_vip"] = True
+                            save_data()
+                            send(chat_id, f"✅ Berhasil mengaktifkan VIP untuk ID: `{target_id}`")
+                            send(target_id, "💎 **VIP ANDA TELAH AKTIF!**\nSekarang Anda memiliki akses penuh tanpa batas masa trial.", main_menu(target_id, False))
+                        else:
+                            send(chat_id, f"❌ ID `{target_id}` tidak ditemukan dalam database.")
                     continue
 
-                # --- LOGIKA UMUM ---
-                if text == "/start":
+                if text == "👑 ADMIN DASHBOARD" and owner_access:
+                    msg_admin = f"📊 *STATISTIK ADMIN*\nTotal User: {len(users)}\n\n"
+                    msg_admin += "Untuk memberi VIP, ketik:\n`/setvip ID_USER`"
+                    send(chat_id, msg_admin)
+                
+                elif text == "/start":
                     send(chat_id, "🤖 *X-ALLER SYSTEM ONLINE*", main_menu(chat_id, owner_access))
+                
                 elif text.lower() == "add account":
                     if get_remaining_days(chat_id) <= 0 and not u.get("is_vip"):
-                        send(chat_id, f"❌ Trial habis. Hubungi {ADMIN_PEMBELIAN}."); continue
+                        send(chat_id, f"❌ Masa Trial habis. Silakan hubungi {ADMIN_PEMBELIAN} untuk aktivasi VIP."); continue
                     u["state"] = "input"; send(chat_id, "👤 Username X (tanpa @):")
+                
                 elif u.get("state") == "input":
                     acc = text.replace("@", "").strip().lower()
                     u["temp_acc"] = acc; u["modes"] = []; u["state"] = None
-                    send(chat_id, f"⚙️ *SETTING @{acc}*", mode_keyboard([]))
+                    send(chat_id, f"⚙️ *MODE @{acc}*", mode_keyboard([]))
+
                 elif text == "📋 List Accounts":
                     accs = list(u["accounts"].keys())
-                    send(chat_id, "📋 *DAFTAR:* \n" + ("\n".join(accs) if accs else "Kosong."))
-                elif text.startswith("👤 Status:"):
-                    d = get_remaining_days(chat_id)
-                    st = "💎 Akun VIP" if u.get("is_vip") else f"⏳ Trial: {d} Hari"
-                    send(chat_id, f"📊 *INFO*\nStatus: {st}\nUpgrade VIP: {ADMIN_PEMBELIAN}")
+                    send(chat_id, "📋 *DAFTAR:*\n" + ("\n".join(accs) if accs else "Kosong."))
 
-        except: pass
+                elif text == "❌ Remove Account":
+                    u["state"] = "remove"; send(chat_id, "Ketik username yang ingin dihapus:")
+                
+                elif u.get("state") == "remove":
+                    acc = text.replace("@", "").strip().lower()
+                    if acc in u["accounts"]:
+                        del u["accounts"][acc]; save_data()
+                        send(chat_id, f"🗑️ @{acc} dihapus.", main_menu(chat_id, owner_access))
+                    u["state"] = None
+
+        except Exception as e:
+            print(f"Error: {e}")
         time.sleep(1)
 
-threading.Thread(target=monitor, daemon=True).start()
 bot_loop()
