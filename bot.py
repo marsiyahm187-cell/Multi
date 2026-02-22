@@ -1,4 +1,4 @@
-# ==== TELEGRAM X MONITOR BOT (FULL CLEAN VERSION) ====
+# ==== TELEGRAM X MONITOR BOT (CLEAN AFTER CONFIRM) ====
 import time, json, os, threading, requests, feedparser
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -35,7 +35,7 @@ def is_member(user_id):
 
 def send_lock_msg(chat_id):
     kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}], [{"text": "🔄 Cek Status", "callback_data": "check_sub"}]]}
-    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk menggunakan bot.", kb)
+    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nBergabunglah ke channel untuk menggunakan bot.", kb)
 
 # --- FUNGSI DASAR & CLEANER ---
 def send(chat_id, text, markup=None):
@@ -79,7 +79,7 @@ def remove_keyboard(accounts):
     buttons.append([{"text": "🔙 BATAL", "callback_data": "cancel"}])
     return {"inline_keyboard": buttons}
 
-# --- MONITORING LOOP ---
+# --- MONITORING ---
 def monitor():
     while True:
         try:
@@ -119,7 +119,7 @@ def bot_loop():
                     
                     if data == "check_sub":
                         if is_member(chat_id):
-                            answer_callback(cq["id"], "Akses dibuka!")
+                            answer_callback(cq["id"])
                             edit(chat_id, msg_id, "✅ **AKSES DIBUKA**", None)
                             send(chat_id, "Selamat datang!", main_menu())
                         else: answer_callback(cq["id"], "Belum join!")
@@ -130,15 +130,15 @@ def bot_loop():
                     
                     if data.startswith("mode|"):
                         m = data.split("|")[1]
-                        if m in u.get("modes", []): u["modes"].remove(m)
-                        else: u.setdefault("modes", []).append(m)
+                        if m in u["modes"]: u["modes"].remove(m)
+                        else: u["modes"].append(m)
                         edit(chat_id, msg_id, f"⚙️ *MODE @{u.get('temp')}*", mode_keyboard(u["modes"]))
                     
                     elif data.startswith("del|"):
                         acc = data.split("|")[1]
                         if acc in u["accounts"]:
                             del u["accounts"][acc]; save_data()
-                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} telah dihapus.", None)
+                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} tidak lagi dipantau.", None)
                     
                     elif data == "done":
                         acc = u.get("temp")
@@ -146,23 +146,23 @@ def bot_loop():
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None
                             save_data()
-                            # --- FULL CLEAN LOGIC ---
-                            # Hapus pesan pengaturan mode yang dilingkari user
-                            delete_msg(chat_id, msg_id)
-                            # Kirim notifikasi sukses sebentar lalu hapus
-                            temp = send(chat_id, f"✅ @{acc} berhasil dipantau!")
-                            time.sleep(3) # Tunggu 3 detik agar user sempat baca
-                            delete_msg(chat_id, temp.json()['result']['message_id'])
-                            # Bersihkan daftar pesan sampah lainnya jika ada
+                            # --- LOGIKA PEMBERSIHAN SETELAH KONFIRMASI ---
+                            # 1. Hapus semua pesan proses yang tercatat
                             for m_id in u.get("to_delete", []):
                                 delete_msg(chat_id, m_id)
+                            # 2. Hapus pesan pengaturan mode (pesan ini sendiri)
+                            delete_msg(chat_id, msg_id)
+                            # 3. Kirim notifikasi sukses, tunggu 3 detik, lalu hapus
                             u["to_delete"] = []
+                            temp = send(chat_id, f"✅ @{acc} berhasil dipantau!")
+                            time.sleep(3)
+                            delete_msg(chat_id, temp.json()['result']['message_id'])
                     
                     elif data == "cancel":
                         u["state"] = None
-                        edit(chat_id, msg_id, "❌ *DIBATALKAN*", None)
-                        time.sleep(2)
+                        for m_id in u.get("to_delete", []): delete_msg(chat_id, m_id)
                         delete_msg(chat_id, msg_id)
+                        u["to_delete"] = []
                     continue
 
                 if "message" not in upd: continue
@@ -173,36 +173,31 @@ def bot_loop():
 
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None, "to_delete": []})
 
-                if text == "/start": 
-                    send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
-                elif text == "/id": 
-                    send(chat_id, f"ID: `{chat_id}`")
+                if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
+                elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
                 elif text == "/admin" and chat_id == str(OWNER_CHAT_ID):
-                    rep = f"👑 *ADMIN DASHBOARD*\n\nTotal Users: {len(users)}\n"
+                    rep = f"👑 *ADMIN*\nUsers: {len(users)}\n"
                     for uid, ud in users.items():
-                        acc_list = ", ".join(ud.get("accounts", {}).keys()) or "Kosong"
-                        rep += f"👤 `{uid}`: {acc_list}\n"
+                        rep += f"👤 `{uid}`: {list(ud.get('accounts', {}).keys())}\n"
                     send(chat_id, rep)
 
                 elif text.lower() == "add account":
                     force_reply = {"force_reply": True, "selective": True}
                     resp = send(chat_id, "👤 *MASUKKAN USERNAME*\n\nBalas dengan username X (tanpa @):", force_reply)
-                    u.setdefault("to_delete", []).append(resp.json()['result']['message_id'])
+                    # Catat pesan instruksi untuk dihapus nanti saat 'done'
+                    u["to_delete"].append(resp.json()['result']['message_id'])
                 
                 elif "reply_to_message" in msg:
                     orig_text = msg["reply_to_message"].get("text", "")
                     if "MASUKKAN USERNAME" in orig_text:
                         username = text.replace("@", "").strip().lower()
-                        # Hapus pesan input user
-                        delete_msg(chat_id, msg["message_id"])
-                        # Hapus instruksi "MASUKKAN USERNAME"
-                        if u.get("to_delete"):
-                            delete_msg(chat_id, u["to_delete"].pop())
+                        # Catat pesan input user untuk dihapus nanti saat 'done'
+                        u["to_delete"].append(msg["message_id"])
 
                         status = send(chat_id, f"🔍 Mengecek @{username}...")
                         if is_valid_x(username):
                             u["temp"] = username; u["modes"] = []; u["state"] = "choose"
-                            # Pesan mode ini akan dihapus di logic 'done' nanti
+                            # Ubah pesan 'Mengecek' menjadi pemilihan mode (msg_id tetap dicatat)
                             edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
                         else:
                             edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan.", None)
@@ -215,8 +210,8 @@ def bot_loop():
                     send(chat_id, txt)
                 elif text == "❌ Remove Account":
                     accs = list(u.get("accounts", {}).keys())
-                    if not accs: send(chat_id, "📭 Daftar kosong.")
-                    else: send(chat_id, "🗑️ Pilih akun yang ingin dihapus:", remove_keyboard(accs))
+                    if not accs: send(chat_id, "📭 Kosong.")
+                    else: send(chat_id, "🗑️ Pilih akun:", remove_keyboard(accs))
 
         except: pass
         time.sleep(1)
