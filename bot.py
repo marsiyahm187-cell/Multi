@@ -1,22 +1,22 @@
-# ==== TELEGRAM X MONITOR BOT (STABLE & FAST VERSION) ====
+# ==== TELEGRAM X MONITOR BOT (STABLE & FAST) ====
 import time, json, os, threading, requests, feedparser
 
-# Ambil Variabel dari Railway - Pastikan sudah benar di panel!
+# Variabel dari Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
 
-# Konfigurasi Channel
+# Saluran Wajib (Force Subscribe)
 CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
-# Daftar Mirror Nitter (Ditambah agar lebih stabil)
+# Daftar Alamat Cadangan (Mirror)
 NITTER_INSTANCES = [
     "https://nitter.net", 
     "https://nitter.cz", 
     "https://nitter.privacydev.net",
-    "https://nitter.moomoo.me"
+    "https://nitter.it"
 ]
 
 def load_data():
@@ -31,7 +31,7 @@ def save_data():
 
 users = load_data()
 
-# --- FUNGSI MEMBER (FORCE SUB) ---
+# --- FUNGSI KEANGGOTAAN ---
 def is_member(user_id):
     try:
         url = f"{API}/getChatMember"
@@ -43,7 +43,7 @@ def is_member(user_id):
 
 def send_lock_msg(chat_id):
     kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}], [{"text": "🔄 Cek Status", "callback_data": "check_sub"}]]}
-    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk menggunakan bot.", kb)
+    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk mengaktifkan bot.", kb)
 
 # --- FUNGSI DASAR ---
 def send(chat_id, text, markup=None):
@@ -58,11 +58,10 @@ def edit(chat_id, msg_id, text, markup):
 def answer_callback(callback_id, text=None):
     requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": callback_id, "text": text})
 
-# --- VALIDASI USERNAME (ANTI-STUCK) ---
+# --- VALIDASI CEPAT (TIMEOUT 5 DETIK) ---
 def is_valid_x(username):
     for base_url in NITTER_INSTANCES:
         try:
-            # Menggunakan timeout 5 detik agar tidak stuck 2 menit
             r = requests.get(f"{base_url}/{username}/rss", timeout=5)
             if r.status_code == 200: return True
         except: continue
@@ -129,7 +128,7 @@ def bot_loop():
                             answer_callback(cq["id"], "Akses dibuka!")
                             edit(chat_id, msg_id, "✅ **AKSES DIBUKA**", None)
                             send(chat_id, "Selamat datang!", main_menu())
-                        else: answer_callback(cq["id"], "Bergabunglah dulu!")
+                        else: answer_callback(cq["id"], "Belum join!")
                         continue
 
                     answer_callback(cq["id"])
@@ -152,7 +151,7 @@ def bot_loop():
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None; save_data()
-                            send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
+                            send(chat_id, f"✅ @{acc} dipantau!", main_menu())
                     
                     elif data == "cancel":
                         u["state"] = None
@@ -170,6 +169,7 @@ def bot_loop():
                 if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
                 elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
                 
+                # DASHBOARD ADMIN
                 elif text == "/admin" and chat_id == str(OWNER_CHAT_ID):
                     rep = f"👑 *ADMIN DASHBOARD*\n\nTotal Users: {len(users)}\n"
                     for uid, ud in users.items():
@@ -183,12 +183,11 @@ def bot_loop():
                 elif u["state"] == "add":
                     username = text.replace("@", "").strip().lower()
                     status = send(chat_id, f"🔍 Mengecek @{username}...")
-                    # Pengecekan dilakukan secara cepat
                     if is_valid_x(username):
                         u["temp"] = username; u["modes"] = []; u["state"] = "choose"
-                        edit(chat_id, status.json()['result']['message_id'], f"✅ Akun Ditemukan!\nPilih mode:", mode_keyboard([]))
+                        edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
                     else:
-                        edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan atau server sibuk. Coba lagi nanti.", None)
+                        edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan atau server sibuk.", None)
                         u["state"] = None
                 
                 elif text == "📋 List Accounts":
