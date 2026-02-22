@@ -3,9 +3,10 @@
 import time import json import os import threading import requests
 import feedparser
 
-BOT_TOKEN = os.getenv(“BOT_TOKEN”) OWNER_CHAT_ID = str(os.getenv(“OWNER_CHAT_ID”))
+BOT_TOKEN = os.getenv(“BOT_TOKEN”) 
+OWNER_CHAT_ID =str(os.getenv(“OWNER_CHAT_ID”))
 
-API = f”https://api.telegram.org/bot{BOT_TOKEN}” DATA_FILE = “users.json”
+API = f”https://api.telegram.org/bot{BOT_TOKEN}” DATA_FILE =“users.json”
 
 ================= DATA =================
 
