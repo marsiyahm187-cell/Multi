@@ -1,4 +1,4 @@
-# ==== TELEGRAM X MONITOR BOT (FORCE SUBSCRIBE VERSION) ====
+# ==== TELEGRAM X MONITOR BOT (FIXED DELETE NOTIF) ====
 import time, json, os, threading, requests, feedparser
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -7,7 +7,7 @@ API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
 
 # --- KONFIGURASI CHANNEL ---
-CHANNEL_ID = "@xallertch" # Username channel kamu
+CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
 NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
@@ -24,27 +24,19 @@ def save_data():
 
 users = load_data()
 
-# --- FUNGSI CEK MEMBER (FORCE SUBSCRIBE) ---
+# --- FUNGSI MEMBER ---
 def is_member(user_id):
     try:
         url = f"{API}/getChatMember"
         params = {"chat_id": CHANNEL_ID, "user_id": user_id}
         r = requests.get(url, params=params).json()
         status = r.get("result", {}).get("status", "")
-        # Status yang dianggap sudah bergabung
         return status in ["creator", "administrator", "member"]
-    except:
-        return True # Jika error, bebaskan agar bot tidak stuck
+    except: return True
 
 def send_lock_msg(chat_id):
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}],
-            [{"text": "🔄 Saya Sudah Gabung", "callback_data": "check_sub"}]
-        ]
-    }
-    text = "⚠️ **AKSES TERKUNCI**\n\nKamu wajib bergabung ke channel kami terlebih dahulu untuk menggunakan bot ini."
-    send(chat_id, text, keyboard)
+    kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}], [{"text": "🔄 Cek Status", "callback_data": "check_sub"}]]}
+    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk mengaktifkan bot.", kb)
 
 # --- FUNGSI DASAR ---
 def send(chat_id, text, markup=None):
@@ -57,9 +49,7 @@ def edit(chat_id, msg_id, text, markup):
     return requests.post(f"{API}/editMessageText", data=payload)
 
 def answer_callback(callback_id, text=None):
-    data = {"callback_query_id": callback_id}
-    if text: data["text"] = text
-    requests.post(f"{API}/answerCallbackQuery", data=data)
+    requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": callback_id, "text": text})
 
 def is_valid_x(username):
     for base_url in NITTER_INSTANCES:
@@ -81,12 +71,11 @@ def remove_keyboard(accounts):
     buttons.append([{"text": "🔙 BATAL", "callback_data": "cancel"}])
     return {"inline_keyboard": buttons}
 
-# --- MONITORING LOOP ---
+# --- MONITORING ---
 def monitor():
     while True:
         try:
             for chat_id, data in users.items():
-                # Jika user keluar channel, monitor tetap jalan tapi mereka tidak bisa kontrol bot
                 for acc, cfg in data.get("accounts", {}).items():
                     for base_url in NITTER_INSTANCES:
                         feed = feedparser.parse(f"{base_url}/{acc}/rss")
@@ -106,7 +95,7 @@ def monitor():
         except: pass
         time.sleep(120)
 
-# --- BOT INTERACTION ---
+# --- BOT LOOP ---
 def bot_loop():
     offset = None
     while True:
@@ -115,50 +104,52 @@ def bot_loop():
             for upd in updates.get("result", []):
                 offset = upd["update_id"] + 1
                 
-                # Handling Callback Query
                 if "callback_query" in upd:
                     cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
+                    msg_id = cq["message"]["message_id"]
                     data = cq["data"]
                     
                     if data == "check_sub":
                         if is_member(chat_id):
-                            answer_callback(cq["id"], "✅ Berhasil! Akses dibuka.")
-                            edit(chat_id, cq["message"]["message_id"], "✅ **AKSES DIBUKA**\n\nSilakan gunakan menu di bawah.", None)
-                            send(chat_id, "Selamat datang kembali!", main_menu())
-                        else:
-                            answer_callback(cq["id"], "❌ Kamu belum bergabung!")
+                            answer_callback(cq["id"], "Akses dibuka!")
+                            edit(chat_id, msg_id, "✅ **AKSES DIBUKA**", None)
+                            send(chat_id, "Silakan gunakan menu:", main_menu())
+                        else: answer_callback(cq["id"], "Belum join!")
                         continue
 
                     answer_callback(cq["id"])
                     u = users.setdefault(chat_id, {"accounts": {}, "state": None, "modes": []})
+                    
                     if data.startswith("mode|"):
                         m = data.split("|")[1]
                         if m in u["modes"]: u["modes"].remove(m)
                         else: u.setdefault("modes", []).append(m)
-                        edit(chat_id, cq["message"]["message_id"], f"⚙️ *MODE @{u.get('temp')}*", mode_keyboard(u["modes"]))
+                        edit(chat_id, msg_id, f"⚙️ *MODE @{u.get('temp')}*", mode_keyboard(u["modes"]))
+                    
                     elif data.startswith("del|"):
                         acc = data.split("|")[1]
                         if acc in u["accounts"]:
                             del u["accounts"][acc]; save_data()
-                            edit(chat_id, cq["message"]["message_id"], f"🗑️ @{acc} dihapus.", None)
+                            # PERBAIKAN: Menambah notifikasi setelah hapus
+                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} tidak lagi dipantau.", None)
+                    
                     elif data == "done":
                         acc = u.get("temp")
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None; save_data()
                             send(chat_id, f"✅ @{acc} dipantau!", main_menu())
+                    
                     elif data == "cancel":
                         u["state"] = None
-                        edit(chat_id, cq["message"]["message_id"], "❌ *DIBATALKAN*", None)
+                        edit(chat_id, msg_id, "❌ *DIBATALKAN*", None)
                     continue
 
                 if "message" not in upd: continue
                 msg = upd["message"]; chat_id = str(msg["chat"]["id"]); text = msg.get("text", "")
                 
-                # --- CEK MEMBERSHIP SETIAP KALI CHAT ---
                 if not is_member(chat_id) and chat_id != str(OWNER_CHAT_ID):
-                    send_lock_msg(chat_id)
-                    continue
+                    send_lock_msg(chat_id); continue
 
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None})
                 if text in ["add account", "📋 List Accounts", "❌ Remove Account", "/start"]: u["state"] = None
@@ -178,16 +169,16 @@ def bot_loop():
                         u["temp"] = username; u["modes"] = []; u["state"] = "choose"
                         edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
                     else:
-                        edit(chat_id, status.json()['result']['message_id'], "❌ Tidak ditemukan/Nitter sibuk.", None)
+                        edit(chat_id, status.json()['result']['message_id'], "❌ Tidak ditemukan/sibuk.", None)
                         u["state"] = None
                 elif text == "📋 List Accounts":
                     accs = u.get("accounts", {})
-                    txt = "📋 *PANTAUAN:*\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong.")
+                    txt = "📋 *DAFTAR PANTAUAN:*\n\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong.")
                     send(chat_id, txt)
                 elif text == "❌ Remove Account":
                     accs = list(u.get("accounts", {}).keys())
                     if not accs: send(chat_id, "📭 Kosong.")
-                    else: send(chat_id, "🗑️ Pilih akun:", remove_keyboard(accs))
+                    else: send(chat_id, "🗑️ Pilih akun yang ingin dihapus:", remove_keyboard(accs))
         except: pass
         time.sleep(1)
 
