@@ -1,22 +1,19 @@
-# ==== TELEGRAM X MONITOR BOT (STABLE & FAST) ====
+# ==== TELEGRAM X MONITOR BOT (CLEAN VERSION) ====
 import time, json, os, threading, requests, feedparser
 
-# Variabel dari Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
 
-# Saluran Wajib (Force Subscribe)
 CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
-# Daftar Alamat Cadangan (Mirror)
 NITTER_INSTANCES = [
     "https://nitter.net", 
     "https://nitter.cz", 
     "https://nitter.privacydev.net",
-    "https://nitter.it"
+    "https://nitter.moomoo.me"
 ]
 
 def load_data():
@@ -31,7 +28,7 @@ def save_data():
 
 users = load_data()
 
-# --- FUNGSI KEANGGOTAAN ---
+# --- FUNGSI MEMBER ---
 def is_member(user_id):
     try:
         url = f"{API}/getChatMember"
@@ -43,7 +40,7 @@ def is_member(user_id):
 
 def send_lock_msg(chat_id):
     kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}], [{"text": "🔄 Cek Status", "callback_data": "check_sub"}]]}
-    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk mengaktifkan bot.", kb)
+    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk menggunakan bot.", kb)
 
 # --- FUNGSI DASAR ---
 def send(chat_id, text, markup=None):
@@ -55,10 +52,13 @@ def edit(chat_id, msg_id, text, markup):
     payload = {"chat_id": str(chat_id), "message_id": msg_id, "text": text, "reply_markup": json.dumps(markup), "parse_mode": "Markdown"}
     requests.post(f"{API}/editMessageText", data=payload)
 
+def delete_msg(chat_id, msg_id):
+    # Fitur Auto Delete
+    requests.post(f"{API}/deleteMessage", data={"chat_id": str(chat_id), "message_id": msg_id})
+
 def answer_callback(callback_id, text=None):
     requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": callback_id, "text": text})
 
-# --- VALIDASI CEPAT (TIMEOUT 5 DETIK) ---
 def is_valid_x(username):
     for base_url in NITTER_INSTANCES:
         try:
@@ -166,39 +166,48 @@ def bot_loop():
 
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None})
 
-                if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
-                elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
-                
-                # DASHBOARD ADMIN
+                if text == "/start": 
+                    send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
+                elif text == "/id": 
+                    send(chat_id, f"ID: `{chat_id}`")
                 elif text == "/admin" and chat_id == str(OWNER_CHAT_ID):
-                    rep = f"👑 *ADMIN DASHBOARD*\n\nTotal Users: {len(users)}\n"
+                    rep = f"👑 *ADMIN DASHBOARD*\n\nUsers: {len(users)}\n"
                     for uid, ud in users.items():
-                        acc_list = ", ".join(ud.get("accounts", {}).keys()) or "Kosong"
-                        rep += f"👤 `{uid}`: {acc_list}\n"
+                        rep += f"👤 `{uid}`: {list(ud.get('accounts', {}).keys())}\n"
                     send(chat_id, rep)
 
+                # --- ADD ACCOUNT DENGAN AUTO DELETE ---
                 elif text.lower() == "add account":
-                    u["state"] = "add"; send(chat_id, "👤 Masukkan username X (tanpa @):")
+                    force_reply = {"force_reply": True, "selective": True}
+                    resp = send(chat_id, "👤 *MASUKKAN USERNAME*\n\nSilakan balas pesan ini dengan username X (tanpa @):", force_reply)
+                    # Simpan ID pesan instruksi untuk dihapus nanti
+                    u["last_instruction"] = resp.json()['result']['message_id']
                 
-                elif u["state"] == "add":
-                    username = text.replace("@", "").strip().lower()
-                    status = send(chat_id, f"🔍 Mengecek @{username}...")
-                    if is_valid_x(username):
-                        u["temp"] = username; u["modes"] = []; u["state"] = "choose"
-                        edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
-                    else:
-                        edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan atau server sibuk.", None)
-                        u["state"] = None
+                elif "reply_to_message" in msg:
+                    orig_text = msg["reply_to_message"].get("text", "")
+                    if "MASUKKAN USERNAME" in orig_text:
+                        username = text.replace("@", "").strip().lower()
+                        
+                        # Hapus pesan instruksi dan pesan input user (Auto Delete)
+                        if "last_instruction" in u:
+                            delete_msg(chat_id, u["last_instruction"])
+                        delete_msg(chat_id, msg["message_id"])
+
+                        status = send(chat_id, f"🔍 Mengecek @{username}...")
+                        if is_valid_x(username):
+                            u["temp"] = username; u["modes"] = []; u["state"] = "choose"
+                            edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
+                        else:
+                            edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan.", None)
                 
                 elif text == "📋 List Accounts":
                     accs = u.get("accounts", {})
-                    txt = "📋 *DAFTAR PANTAUAN:*\n\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong.")
+                    txt = "📋 *PANTAUAN:*\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong.")
                     send(chat_id, txt)
-                
                 elif text == "❌ Remove Account":
                     accs = list(u.get("accounts", {}).keys())
-                    if not accs: send(chat_id, "📭 Daftar kosong.")
-                    else: send(chat_id, "🗑️ Pilih akun yang ingin dihapus:", remove_keyboard(accs))
+                    if not accs: send(chat_id, "📭 Kosong.")
+                    else: send(chat_id, "🗑️ Pilih akun:", remove_keyboard(accs))
 
         except: pass
         time.sleep(1)
