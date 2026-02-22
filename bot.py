@@ -1,7 +1,7 @@
-# ==== TELEGRAM X MONITOR BOT (STABLE VERSION - NO AUTO DELETE) ====
+# ==== TELEGRAM X MONITOR BOT (FINAL STABLE VERSION) ====
 import time, json, os, threading, requests, feedparser
 
-# Variabel dari Railway
+# Variabel Railway - Pastikan sudah benar di panel Railway!
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -12,12 +12,7 @@ CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
 # Mirror Nitter Cadangan
-NITTER_INSTANCES = [
-    "https://nitter.net", 
-    "https://nitter.cz", 
-    "https://nitter.privacydev.net",
-    "https://nitter.moomoo.me"
-]
+NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -31,7 +26,7 @@ def save_data():
 
 users = load_data()
 
-# --- FUNGSI MEMBER ---
+# --- FUNGSI MEMBER (Wajib Join Channel) ---
 def is_member(user_id):
     try:
         url = f"{API}/getChatMember"
@@ -151,7 +146,8 @@ def bot_loop():
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None
                             save_data()
-                            send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
+                            # FIXED: Notifikasi sukses + panggil main_menu() agar tombol tidak hilang
+                            send(chat_id, f"✅ @{acc} berhasil ditambahkan!", main_menu())
                     
                     elif data == "cancel":
                         u["state"] = None
@@ -166,10 +162,8 @@ def bot_loop():
 
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None})
 
-                if text == "/start": 
-                    send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
-                elif text == "/id": 
-                    send(chat_id, f"ID: `{chat_id}`")
+                if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
+                elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
                 elif text == "/admin" and chat_id == str(OWNER_CHAT_ID):
                     rep = f"👑 *ADMIN*\nUsers: {len(users)}\n"
                     for uid, ud in users.items():
