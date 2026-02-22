@@ -1,13 +1,10 @@
-# ==== TELEGRAM X MONITOR BOT (CLEAN CONFIRM VERSION) ====
+# ==== TELEGRAM X MONITOR BOT (CLEAN & CONSISTENT VERSION) ====
 import time, json, os, threading, requests, feedparser
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
-
-CHANNEL_ID = "@xallertch"
-CHANNEL_LINK = "https://t.me/xallertch"
 
 NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
 
@@ -52,6 +49,16 @@ def mode_keyboard(selected):
         [{"text": "🚀 KONFIRMASI", "callback_data": "done"}]
     ]}
 
+def remove_select_keyboard(accounts, selected):
+    # Logika centang untuk penghapusan massal/pilihan
+    buttons = []
+    for acc in accounts:
+        mark = "✅" if acc in selected else "❌"
+        buttons.append([{"text": f"{mark} @{acc}", "callback_data": f"rem_sel|{acc}"}])
+    buttons.append([{"text": "🗑️ KONFIRMASI HAPUS", "callback_data": "rem_confirm"}])
+    buttons.append([{"text": "🔙 BATAL", "callback_data": "cancel"}])
+    return {"inline_keyboard": buttons}
+
 # --- BOT LOOP ---
 def bot_loop():
     offset = None
@@ -65,8 +72,9 @@ def bot_loop():
                     cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
                     msg_id = cq["message"]["message_id"]; data = cq["data"]
                     answer_callback(cq["id"])
-                    u = users.setdefault(chat_id, {"accounts": {}, "state": None, "modes": []})
+                    u = users.setdefault(chat_id, {"accounts": {}, "state": None, "modes": [], "rem_queue": []})
                     
+                    # LOGIKA ADD ACCOUNT
                     if data.startswith("mode|"):
                         m = data.split("|")[1]
                         if m in u.get("modes", []): u["modes"].remove(m)
@@ -78,16 +86,33 @@ def bot_loop():
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
                             u["state"] = None; save_data()
-                            
-                            # --- LOGIKA NOMOR 1: HAPUS MENU (WARNA MERAH) ---
                             delete_msg(chat_id, msg_id)
-                            
-                            # --- LOGIKA NOMOR 2: SISAKAN NOTIF SUKSES ---
-                            # Kita panggil main_menu() di sini agar tombol bawah tidak hilang
                             send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
                     
+                    # LOGIKA REMOVE ACCOUNT (PILIHAN CENTANG)
+                    elif data.startswith("rem_sel|"):
+                        acc = data.split("|")[1]
+                        if acc in u.get("rem_queue", []): u["rem_queue"].remove(acc)
+                        else: u.setdefault("rem_queue", []).append(acc)
+                        edit(chat_id, msg_id, "🗑️ *PILIH AKUN UNTUK DIHAPUS:*", remove_select_keyboard(list(u["accounts"].keys()), u["rem_queue"]))
+
+                    elif data == "rem_confirm":
+                        removed = []
+                        for acc in u.get("rem_queue", []):
+                            if acc in u["accounts"]:
+                                del u["accounts"][acc]
+                                removed.append(f"@{acc}")
+                        
+                        if removed:
+                            save_data()
+                            delete_msg(chat_id, msg_id)
+                            send(chat_id, f"🗑️ {', '.join(removed)} berhasil dihapus!", main_menu())
+                        else:
+                            answer_callback(cq["id"], "Pilih minimal satu akun!")
+                        u["rem_queue"] = []
+
                     elif data == "cancel":
-                        u["state"] = None
+                        u["state"] = None; u["rem_queue"] = []
                         delete_msg(chat_id, msg_id)
                     continue
 
@@ -96,14 +121,14 @@ def bot_loop():
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None})
 
                 if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
+                
                 elif text.lower() == "add account":
                     u["state"] = "add"
                     send(chat_id, "👤 *MASUKKAN USERNAME*\n\nKetik username X (tanpa @):")
+                
                 elif u["state"] == "add":
-                    # Mencegah tombol menu ikut terproses sebagai username
                     if text in ["add account", "📋 List Accounts", "❌ Remove Account"]:
                         u["state"] = None; continue
-                    
                     username = text.replace("@", "").strip().lower()
                     u["temp"] = username; u["modes"] = []; u["state"] = "choose"
                     send(chat_id, f"⚙️ *MODE @{username}*", mode_keyboard([]))
@@ -111,6 +136,14 @@ def bot_loop():
                 elif text == "📋 List Accounts":
                     accs = u.get("accounts", {})
                     send(chat_id, "📋 *DAFTAR PANTAUAN:*\n\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong."))
+
+                elif text == "❌ Remove Account":
+                    accs = list(u.get("accounts", {}).keys())
+                    if not accs:
+                        send(chat_id, "📭 Daftar pantau kosong.")
+                    else:
+                        u["rem_queue"] = []
+                        send(chat_id, "🗑️ *PILIH AKUN UNTUK DIHAPUS:*", remove_select_keyboard(accs, []))
         except: pass
         time.sleep(1)
 
