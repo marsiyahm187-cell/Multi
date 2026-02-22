@@ -1,7 +1,6 @@
-# ==== TELEGRAM X MONITOR BOT (FINAL STABLE VERSION) ====
 import time, json, os, threading, requests, feedparser
 
-# Variabel Railway - Pastikan sudah benar di panel Railway!
+# Variabel Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -11,7 +10,7 @@ DATA_FILE = "users.json"
 CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 
-# Mirror Nitter Cadangan
+# Nitter Mirror (Paling Stabil)
 NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
 
 def load_data():
@@ -26,7 +25,7 @@ def save_data():
 
 users = load_data()
 
-# --- FUNGSI MEMBER (Wajib Join Channel) ---
+# --- FUNGSI MEMBER ---
 def is_member(user_id):
     try:
         url = f"{API}/getChatMember"
@@ -114,17 +113,7 @@ def bot_loop():
                 
                 if "callback_query" in upd:
                     cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
-                    msg_id = cq["message"]["message_id"]
-                    data = cq["data"]
-                    
-                    if data == "check_sub":
-                        if is_member(chat_id):
-                            answer_callback(cq["id"])
-                            edit(chat_id, msg_id, "✅ **AKSES DIBUKA**", None)
-                            send(chat_id, "Selamat datang!", main_menu())
-                        else: answer_callback(cq["id"], "Belum join!")
-                        continue
-
+                    msg_id = cq["message"]["message_id"]; data = cq["data"]
                     answer_callback(cq["id"])
                     u = users.setdefault(chat_id, {"accounts": {}, "state": None, "modes": []})
                     
@@ -133,22 +122,17 @@ def bot_loop():
                         if m in u.get("modes", []): u["modes"].remove(m)
                         else: u.setdefault("modes", []).append(m)
                         edit(chat_id, msg_id, f"⚙️ *MODE @{u.get('temp')}*", mode_keyboard(u["modes"]))
-                    
                     elif data.startswith("del|"):
                         acc = data.split("|")[1]
                         if acc in u["accounts"]:
                             del u["accounts"][acc]; save_data()
-                            edit(chat_id, msg_id, f"🗑️ *BERHASIL DIHAPUS*\n\nAkun @{acc} telah dihapus.", None)
-                    
+                            edit(chat_id, msg_id, f"🗑️ @{acc} dihapus.", None)
                     elif data == "done":
                         acc = u.get("temp")
                         if acc:
                             u["accounts"][acc] = {"mode": u["modes"], "last": None}
-                            u["state"] = None
-                            save_data()
-                            # FIXED: Notifikasi sukses + panggil main_menu() agar tombol tidak hilang
-                            send(chat_id, f"✅ @{acc} berhasil ditambahkan!", main_menu())
-                    
+                            u["state"] = None; save_data()
+                            send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
                     elif data == "cancel":
                         u["state"] = None
                         edit(chat_id, msg_id, "❌ *DIBATALKAN*", None)
@@ -161,6 +145,10 @@ def bot_loop():
                     send_lock_msg(chat_id); continue
 
                 u = users.setdefault(chat_id, {"accounts": {}, "state": None})
+
+                # --- FIX UTAMA: JIKA TEKS ADALAH PERINTAH MENU, RESET STATE ---
+                if text in ["add account", "📋 List Accounts", "❌ Remove Account", "/start", "/admin"]:
+                    u["state"] = None
 
                 if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
                 elif text == "/id": send(chat_id, f"ID: `{chat_id}`")
@@ -175,6 +163,7 @@ def bot_loop():
                     send(chat_id, "👤 *MASUKKAN USERNAME*\n\nKetik username X (tanpa @):")
                 
                 elif u["state"] == "add":
+                    # Bot hanya mengecek jika state benar-benar 'add'
                     username = text.replace("@", "").strip().lower()
                     status = send(chat_id, f"🔍 Mengecek @{username}...")
                     if is_valid_x(username):
@@ -182,6 +171,7 @@ def bot_loop():
                         edit(chat_id, status.json()['result']['message_id'], f"✅ Ditemukan!\nPilih mode:", mode_keyboard([]))
                     else:
                         edit(chat_id, status.json()['result']['message_id'], f"❌ @{username} tidak ditemukan.", None)
+                        u["state"] = None # Reset state agar tidak loop mengecek
                 
                 elif text == "📋 List Accounts":
                     accs = u.get("accounts", {})
@@ -190,7 +180,7 @@ def bot_loop():
                 elif text == "❌ Remove Account":
                     accs = list(u.get("accounts", {}).keys())
                     if not accs: send(chat_id, "📭 Kosong.")
-                    else: send(chat_id, "🗑️ Pilih akun:", remove_keyboard(accs))
+                    else: send(chat_id, "🗑️ Pilih akun yang ingin dihapus:", remove_keyboard(accs))
 
         except: pass
         time.sleep(1)
