@@ -32,9 +32,11 @@ def is_owner(msg):
 
 def get_remaining_days(user_id):
     u = users.get(str(user_id))
-    if not u or not u.get("join_date"): return 30
-    # Jika VIP, abaikan perhitungan sisa hari
+    if not u: return 30
+    # FIX: Jika status is_vip True, jangan hitung sisa hari
     if u.get("is_vip") is True: return 999 
+    if not u.get("join_date"): return 30
+    
     jd = datetime.datetime.strptime(u["join_date"], "%Y-%m-%d")
     rem = (jd + datetime.timedelta(days=30) - datetime.datetime.now()).days
     return max(0, rem)
@@ -52,7 +54,7 @@ def main_menu(user_id, owner_access=False):
     if owner_access:
         kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": "👑 ADMIN DASHBOARD"}]]
     else:
-        # PERBAIKAN: Status VIP harus dicek paling pertama
+        # PERBAIKAN LOGIKA: Cek status VIP terlebih dahulu
         if u.get("is_vip") is True:
             status_text = "💎 VIP"
         else:
@@ -91,8 +93,7 @@ def bot_loop():
                         btn = []
                         for uid, d in users.items():
                             is_v = d.get("is_vip", False)
-                            days = get_remaining_days(uid)
-                            if m_type == "trial" and (is_v or days <= 0): continue
+                            if m_type == "trial" and is_v: continue
                             if m_type == "vip" and not is_v: continue
                             tag = "💎" if is_v else "⏳"
                             btn.append([{"text": f"{tag} ID: {uid}", "callback_data": f"view|{uid}"}])
@@ -107,8 +108,8 @@ def bot_loop():
                     elif data.startswith("upg|"):
                         t_id = data.split("|")[1]
                         users[t_id]["is_vip"] = True; save_data()
-                        send(t_id, "💎 **VIP AKTIF!**\nKetik /start untuk update menu.", main_menu(t_id, False))
-                        requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "✅ Sukses!"})
+                        send(t_id, "💎 **VIP AKTIF!**\nStatus Anda telah diperbarui menjadi VIP.", main_menu(t_id, False))
+                        requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "✅ User berhasil di-upgrade!"})
                     elif data == "back_adm": 
                         requests.post(f"{API}/editMessageText", data={"chat_id": chat_id, "message_id": msg_id, "text": "👑 *ADMIN DASHBOARD*", "reply_markup": json.dumps(admin_kb()), "parse_mode": "Markdown"})
                     continue
@@ -120,7 +121,7 @@ def bot_loop():
                 u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None, "is_vip": False})
                 if owner_access: u["is_vip"] = True
 
-                # Alur Forward Channel
+                # Alur Aktivasi Awal
                 if not u.get("target_channel"):
                     if "forward_from_chat" in msg and msg["forward_from_chat"]["type"] == "channel":
                         u["target_channel"] = msg["forward_from_chat"]["id"]
@@ -134,14 +135,13 @@ def bot_loop():
                 elif text == "👑 ADMIN DASHBOARD" and owner_access:
                     send(chat_id, "👑 *ADMIN DASHBOARD*", admin_kb())
                 elif text.lower() == "add account":
+                    if get_remaining_days(chat_id) <= 0 and not u.get("is_vip"):
+                        send(chat_id, f"❌ Trial habis. Hubungi {ADMIN_PEMBELIAN}."); continue
                     u["state"] = "input"; send(chat_id, "👤 Username X:")
                 elif u.get("state") == "input":
                     acc = text.replace("@", "").strip().lower()
                     u["accounts"][acc] = {"last": None}; u["state"] = None; save_data()
                     send(chat_id, f"✅ @{acc} dipantau.", main_menu(chat_id, owner_access))
-                elif text == "📋 List Accounts":
-                    accs = list(u["accounts"].keys())
-                    send(chat_id, "📋 *DAFTAR:*\n" + ("\n".join(accs) if accs else "Kosong."))
         except: pass
         time.sleep(1)
 
