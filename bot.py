@@ -1,11 +1,16 @@
-# ==== TELEGRAM X MONITOR BOT (CLEAN & CONSISTENT VERSION) ====
-import time, json, os, threading, requests, feedparser
+import time, json, os, threading, requests, feedparser, datetime
 
+# Variabel Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DATA_FILE = "users.json"
 
+# Konfigurasi Channel Owner
+CHANNEL_ID = "@xallertch"
+CHANNEL_LINK = "https://t.me/xallertch"
+
+# Nitter Mirror
 NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
 
 def load_data():
@@ -20,44 +25,87 @@ def save_data():
 
 users = load_data()
 
+# --- FUNGSI VALIDASI ---
+def is_member(user_id):
+    try:
+        url = f"{API}/getChatMember"
+        params = {"chat_id": CHANNEL_ID, "user_id": user_id}
+        r = requests.get(url, params=params, timeout=5).json()
+        status = r.get("result", {}).get("status", "")
+        return status in ["creator", "administrator", "member"]
+    except: return True
+
+def get_remaining_days(user_id):
+    u = users.get(str(user_id))
+    if not u or not u.get("join_date"): return 0
+    if u.get("is_vip"): return 999 
+    
+    join_date = datetime.datetime.strptime(u["join_date"], "%Y-%m-%d")
+    expiry_date = join_date + datetime.timedelta(days=30)
+    remaining = (expiry_date - datetime.datetime.now()).days
+    return max(0, remaining)
+
 # --- FUNGSI DASAR ---
 def send(chat_id, text, markup=None):
     payload = {"chat_id": str(chat_id), "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     if markup: payload["reply_markup"] = json.dumps(markup)
     return requests.post(f"{API}/sendMessage", data=payload)
 
-def edit(chat_id, msg_id, text, markup):
-    payload = {"chat_id": str(chat_id), "message_id": msg_id, "text": text, "reply_markup": json.dumps(markup), "parse_mode": "Markdown"}
-    requests.post(f"{API}/editMessageText", data=payload)
+# --- MONITORING DENGAN AUTO REMINDER ---
+def monitor():
+    while True:
+        try:
+            current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            for chat_id, data in users.items():
+                days = get_remaining_days(chat_id)
+                target_channel = data.get("target_channel")
+                
+                if not target_channel: continue
 
-def delete_msg(chat_id, msg_id):
-    requests.post(f"{API}/deleteMessage", data={"chat_id": str(chat_id), "message_id": msg_id})
+                # 1. LOGIKA PENGINGAT (REMINDER)
+                if not data.get("is_vip") and days in [3, 1] and data.get("last_remind") != current_date:
+                    msg_remind = (
+                        f"⚠️ *PENGINGAT MASA TRIAL*\n\n"
+                        f"Masa trial Anda tersisa *{days} hari*.\n"
+                        f"Dapatkan **notifikasi langsung secara akurat** dengan upgrade ke VIP hanya Rp 15.000/bln!\n"
+                        f"Hubungi: @Allertnow"
+                    )
+                    send(chat_id, msg_remind)
+                    data["last_remind"] = current_date
 
-def answer_callback(callback_id, text=None):
-    requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": callback_id, "text": text})
+                # 2. CEK STATUS EXPIRED
+                if days <= 0 and not data.get("is_vip"):
+                    if data.get("expired_notified") != True:
+                        send(chat_id, "❌ *MASA TRIAL HABIS*\n\nLayanan terhenti. Upgrade VIP sekarang untuk mendapatkan notifikasi tercepat dan akurat via @Allertnow.")
+                        data["expired_notified"] = True
+                    continue 
 
-# --- KEYBOARDS ---
-def main_menu():
-    return {"keyboard": [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}]], "resize_keyboard": True}
+                # 3. PROSES MONITORING X
+                for acc, cfg in data.get("accounts", {}).items():
+                    for base_url in NITTER_INSTANCES:
+                        feed = feedparser.parse(f"{base_url}/{acc}/rss")
+                        if feed.entries:
+                            post = feed.entries[0]
+                            if cfg.get("last") != post.link:
+                                cfg["last"] = post.link
+                                send(target_channel, f"🔔 *UPDATE @{acc}*\n\n{post.link}")
+                            break
+            save_data()
+        except: pass
+        time.sleep(120)
 
-def mode_keyboard(selected):
-    def mark(x): return f"✅ {x}" if x in selected else f"❌ {x}"
-    return {"inline_keyboard": [
-        [{"text": mark("posting"), "callback_data": "mode|posting"}],
-        [{"text": mark("reply"), "callback_data": "mode|reply"}],
-        [{"text": mark("repost"), "callback_data": "mode|repost"}],
-        [{"text": "🚀 KONFIRMASI", "callback_data": "done"}]
-    ]}
-
-def remove_select_keyboard(accounts, selected):
-    # Logika centang untuk penghapusan massal/pilihan
-    buttons = []
-    for acc in accounts:
-        mark = "✅" if acc in selected else "❌"
-        buttons.append([{"text": f"{mark} @{acc}", "callback_data": f"rem_sel|{acc}"}])
-    buttons.append([{"text": "🗑️ KONFIRMASI HAPUS", "callback_data": "rem_confirm"}])
-    buttons.append([{"text": "🔙 BATAL", "callback_data": "cancel"}])
-    return {"inline_keyboard": buttons}
+# --- FUNGSI TAMPILAN ---
+def main_menu(user_id):
+    u = users[str(user_id)]
+    status = "💎 VIP" if u.get("is_vip") else f"⏳ Trial: {get_remaining_days(user_id)} Hari"
+    return {
+        "keyboard": [
+            [{"text": "add account"}],
+            [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}],
+            [{"text": f"👤 Status: {status}"}]
+        ],
+        "resize_keyboard": True
+    }
 
 # --- BOT LOOP ---
 def bot_loop():
@@ -67,84 +115,87 @@ def bot_loop():
             updates = requests.get(f"{API}/getUpdates", params={"offset": offset, "timeout": 20}).json()
             for upd in updates.get("result", []):
                 offset = upd["update_id"] + 1
-                
-                if "callback_query" in upd:
-                    cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
-                    msg_id = cq["message"]["message_id"]; data = cq["data"]
-                    answer_callback(cq["id"])
-                    u = users.setdefault(chat_id, {"accounts": {}, "state": None, "modes": [], "rem_queue": []})
-                    
-                    # LOGIKA ADD ACCOUNT
-                    if data.startswith("mode|"):
-                        m = data.split("|")[1]
-                        if m in u.get("modes", []): u["modes"].remove(m)
-                        else: u.setdefault("modes", []).append(m)
-                        edit(chat_id, msg_id, f"⚙️ *MODE @{u.get('temp')}*", mode_keyboard(u["modes"]))
-                    
-                    elif data == "done":
-                        acc = u.get("temp")
-                        if acc:
-                            u["accounts"][acc] = {"mode": u["modes"], "last": None}
-                            u["state"] = None; save_data()
-                            delete_msg(chat_id, msg_id)
-                            send(chat_id, f"✅ @{acc} berhasil dipantau!", main_menu())
-                    
-                    # LOGIKA REMOVE ACCOUNT (PILIHAN CENTANG)
-                    elif data.startswith("rem_sel|"):
-                        acc = data.split("|")[1]
-                        if acc in u.get("rem_queue", []): u["rem_queue"].remove(acc)
-                        else: u.setdefault("rem_queue", []).append(acc)
-                        edit(chat_id, msg_id, "🗑️ *PILIH AKUN UNTUK DIHAPUS:*", remove_select_keyboard(list(u["accounts"].keys()), u["rem_queue"]))
-
-                    elif data == "rem_confirm":
-                        removed = []
-                        for acc in u.get("rem_queue", []):
-                            if acc in u["accounts"]:
-                                del u["accounts"][acc]
-                                removed.append(f"@{acc}")
-                        
-                        if removed:
-                            save_data()
-                            delete_msg(chat_id, msg_id)
-                            send(chat_id, f"🗑️ {', '.join(removed)} berhasil dihapus!", main_menu())
-                        else:
-                            answer_callback(cq["id"], "Pilih minimal satu akun!")
-                        u["rem_queue"] = []
-
-                    elif data == "cancel":
-                        u["state"] = None; u["rem_queue"] = []
-                        delete_msg(chat_id, msg_id)
-                    continue
-
                 if "message" not in upd: continue
                 msg = upd["message"]; chat_id = str(msg["chat"]["id"]); text = msg.get("text", "")
-                u = users.setdefault(chat_id, {"accounts": {}, "state": None})
+                
+                # Force Subscribe
+                if not is_member(chat_id) and chat_id != str(OWNER_CHAT_ID):
+                    kb = {"inline_keyboard": [[{"text": "📢 Gabung Channel", "url": CHANNEL_LINK}]]}
+                    send(chat_id, "⚠️ **AKSES TERKUNCI**\n\nSilakan bergabung ke channel kami untuk mulai memantau.", kb)
+                    continue
 
-                if text == "/start": send(chat_id, "🤖 *X-ALLER SYSTEM*", main_menu())
+                u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None, "join_date": None, "is_vip": False})
+
+                # --- SAMBUTAN & REGISTRASI CHANNEL ---
+                if not u["target_channel"]:
+                    if "forward_from_chat" in msg and msg["forward_from_chat"]["type"] == "channel":
+                        u["target_channel"] = msg["forward_from_chat"]["id"]
+                        u["join_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
+                        save_data()
+                        
+                        # PESAN SAMBUTAN KHUSUS (WELCOME MESSAGE)
+                        welcome_msg = (
+                            "🎊 **SELAMAT! CHANNEL BERHASIL TERHUBUNG** 🎊\n\n"
+                            "Bot X-Aller kini siap mengirimkan informasi tercepat langsung ke channel Anda.\n\n"
+                            "ℹ️ **Informasi Layanan:**\n"
+                            "• Masa Trial: **30 Hari (Aktif)**\n"
+                            "• Keunggulan VIP: Notifikasi Tercepat & Akurat\n"
+                            "• Biaya Sewa VIP: **Rp 15.000 / Bulan**\n\n"
+                            "🚀 **Cara Memulai:**\n"
+                            "Gunakan tombol `add account` di bawah untuk menambahkan username X yang ingin dipantau.\n\n"
+                            "📩 *Butuh bantuan atau upgrade VIP?* Hubungi: @Allertnow"
+                        )
+                        send(chat_id, welcome_msg, main_menu(chat_id))
+                    else:
+                        send(chat_id, "📖 **PANDUAN AKTIVASI**\n\n1. Buat channel pribadi.\n2. Jadikan bot ini Admin di sana.\n3. **Forward** satu pesan dari channel tersebut ke sini.")
+                    continue
+
+                # Perintah Admin
+                if text.startswith("/setvip") and chat_id == str(OWNER_CHAT_ID):
+                    t_id = text.split(" ")[1]
+                    if t_id in users:
+                        users[t_id]["is_vip"] = True; save_data()
+                        send(t_id, "💎 *VIP AKTIF*\n\nLayanan VIP Anda aktif! Nikmati notifikasi tercepat secara akurat.", main_menu(t_id))
+                        send(chat_id, f"✅ Sukses mengaktifkan VIP untuk `{t_id}`.")
+                    continue
+
+                # Menu Utama
+                if text == "/start":
+                    send(chat_id, "🤖 *X-ALLER SYSTEM ONLINE*", main_menu(chat_id))
                 
                 elif text.lower() == "add account":
-                    u["state"] = "add"
-                    send(chat_id, "👤 *MASUKKAN USERNAME*\n\nKetik username X (tanpa @):")
-                
-                elif u["state"] == "add":
-                    if text in ["add account", "📋 List Accounts", "❌ Remove Account"]:
-                        u["state"] = None; continue
-                    username = text.replace("@", "").strip().lower()
-                    u["temp"] = username; u["modes"] = []; u["state"] = "choose"
-                    send(chat_id, f"⚙️ *MODE @{username}*", mode_keyboard([]))
-                
-                elif text == "📋 List Accounts":
-                    accs = u.get("accounts", {})
-                    send(chat_id, "📋 *DAFTAR PANTAUAN:*\n\n" + ("\n".join([f"🔹 @{a}" for a in accs]) if accs else "Kosong."))
-
-                elif text == "❌ Remove Account":
-                    accs = list(u.get("accounts", {}).keys())
-                    if not accs:
-                        send(chat_id, "📭 Daftar pantau kosong.")
+                    if get_remaining_days(chat_id) <= 0 and not u["is_vip"]:
+                        send(chat_id, "❌ Trial habis. Upgrade VIP Rp 15.000 untuk notifikasi akurat.")
                     else:
-                        u["rem_queue"] = []
-                        send(chat_id, "🗑️ *PILIH AKUN UNTUK DIHAPUS:*", remove_select_keyboard(accs, []))
+                        u["state"] = "add"; send(chat_id, "👤 Username X (tanpa @):")
+
+                elif u.get("state") == "add":
+                    acc = text.replace("@", "").strip().lower()
+                    u["accounts"][acc] = {"last": None}; u["state"] = None; save_data()
+                    send(chat_id, f"✅ @{acc} dipantau.", main_menu(chat_id))
+
+                elif text == "📋 List Accounts":
+                    accs = list(u["accounts"].keys())
+                    send(chat_id, "📋 **DAFTAR:**\n\n" + ("\n".join(accs) if accs else "Kosong."))
+
+                elif text.startswith("👤 Status:"):
+                    d = get_remaining_days(chat_id)
+                    st = "💎 Akun VIP" if u["is_vip"] else f"⏳ Trial: {d} Hari"
+                    msg_v = (
+                        f"📊 *INFO LAYANAN*\n\n"
+                        f"Status: {st}\n"
+                        f"Harga VIP: *Rp 15.000 / Bulan*\n\n"
+                        f"🚀 **Kelebihan VIP:**\n"
+                        f"• Notifikasi langsung & akurat.\n"
+                        f"• Prioritas server tercepat.\n"
+                        f"• Pemantauan tanpa batas waktu.\n\n"
+                        f"Pembayaran via Dana/Gopay/QRIS hubungi:\n"
+                        f"📩 @Allertnow"
+                    )
+                    send(chat_id, msg_v)
+
         except: pass
         time.sleep(1)
 
+threading.Thread(target=monitor, daemon=True).start()
 bot_loop()
