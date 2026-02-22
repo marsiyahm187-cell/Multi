@@ -12,9 +12,6 @@ CHANNEL_ID = "@xallertch"
 CHANNEL_LINK = "https://t.me/xallertch"
 ADMIN_PEMBELIAN = "@Allertnow"
 
-# INSTANCE NITTER
-NITTER_INSTANCES = ["https://nitter.net", "https://nitter.cz", "https://nitter.privacydev.net"]
-
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -36,6 +33,7 @@ def is_owner(msg):
     return cid == str(OWNER_CHAT_ID) or un == OWNER_USERNAME.lower()
 
 def is_member(user_id, msg=None):
+    # Owner @njmondeth selalu dianggap member agar tidak stuck
     if msg and is_owner(msg): return True
     try:
         url = f"{API}/getChatMember"
@@ -43,6 +41,7 @@ def is_member(user_id, msg=None):
         r = requests.get(url, params=params, timeout=10).json()
         if r.get("ok"):
             status = r.get("result", {}).get("status", "")
+            # Member, Administrator, dan Creator diizinkan
             return status in ["creator", "administrator", "member"]
         return False
     except: return True
@@ -77,13 +76,10 @@ def main_menu(user_id, owner_access=False):
 
 def admin_kb():
     return {"inline_keyboard": [
-        [{"text": "👥 List Semua Member", "callback_data": "adm|all"}],
-        [{"text": "⏳ Trial Member", "callback_data": "adm|trial"}, {"text": "💎 VIP Member", "callback_data": "adm|vip"}],
+        [{"text": "👥 Semua Member", "callback_data": "adm|all"}],
+        [{"text": "⏳ Trial", "callback_data": "adm|trial"}, {"text": "💎 VIP", "callback_data": "adm|vip"}],
         [{"text": "🔙 Tutup", "callback_data": "close"}]
     ]}
-
-def user_manage_kb(target_id):
-    return {"inline_keyboard": [[{"text": "🚀 Upgrade ke VIP", "callback_data": f"upg|{target_id}"}], [{"text": "🔙 Kembali", "callback_data": "adm|all"}]]}
 
 # --- BOT LOOP ---
 def bot_loop():
@@ -94,68 +90,80 @@ def bot_loop():
             for upd in updates.get("result", []):
                 offset = upd["update_id"] + 1
                 
+                # CALLBACK HANDLER (ADMIN DASHBOARD UI)
                 if "callback_query" in upd:
                     cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
                     msg_id = cq["message"]["message_id"]; data = cq["data"]
                     
-                    if not is_owner(cq): continue
+                    if not is_owner(cq):
+                        # Pengecekan status untuk user biasa (tombol Cek Status)
+                        if data == "check_sub":
+                            if is_member(chat_id, cq):
+                                requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
+                                send(chat_id, "✅ **AKSES DIBUKA!**", main_menu(chat_id, False))
+                            else:
+                                requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "❌ Anda belum bergabung!", "show_alert": True})
+                        continue
 
-                    if data == "close":
-                        requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
-                    
+                    # Logika Admin Dashboard
+                    if data == "close": requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
                     elif data.startswith("adm|"):
-                        filter_type = data.split("|")[1]
-                        txt = f"📂 *DATA {filter_type.upper()} MEMBER*\n\n"
-                        buttons = []
-                        
+                        m_type = data.split("|")[1]
+                        btn = []
                         for uid, d in users.items():
                             is_v = d.get("is_vip", False)
                             days = get_remaining_days(uid)
-                            
-                            if filter_type == "trial" and (is_v or days <= 0): continue
-                            if filter_type == "vip" and not is_v: continue
-                            
+                            if m_type == "trial" and (is_v or days <= 0): continue
+                            if m_type == "vip" and not is_v: continue
                             tag = "💎" if is_v else "⏳"
-                            buttons.append([{"text": f"{tag} ID: {uid}", "callback_data": f"view|{uid}"}])
-                        
-                        buttons.append([{"text": "🔙 Kembali", "callback_data": "back_adm"}])
-                        edit(chat_id, msg_id, txt + "Pilih user untuk manajemen:", {"inline_keyboard": buttons})
-
+                            btn.append([{"text": f"{tag} ID: {uid}", "callback_data": f"view|{uid}"}])
+                        btn.append([{"text": "🔙 Kembali", "callback_data": "back_adm"}])
+                        edit(chat_id, msg_id, f"📂 *DAFTAR {m_type.upper()}*", {"inline_keyboard": btn})
                     elif data.startswith("view|"):
                         t_id = data.split("|")[1]
-                        u_data = users.get(t_id, {})
-                        info = f"👤 *USER DETAIL*\nID: `{t_id}`\nStatus: {'VIP' if u_data.get('is_vip') else 'Trial'}\nSisa: {get_remaining_days(t_id)} Hari"
-                        edit(chat_id, msg_id, info, user_manage_kb(t_id))
-
+                        info = f"👤 *DETAIL USER*\nID: `{t_id}`\nStatus: VIP" if users[t_id].get("is_vip") else f"👤 *DETAIL USER*\nID: `{t_id}`\nStatus: Trial ({get_remaining_days(t_id)} hari)"
+                        kb = {"inline_keyboard": [[{"text": "🚀 UPGRADE VIP", "callback_data": f"upg|{t_id}"}], [{"text": "🔙 Kembali", "callback_data": "adm|all"}]]}
+                        edit(chat_id, msg_id, info, kb)
                     elif data.startswith("upg|"):
                         t_id = data.split("|")[1]
-                        if t_id in users:
-                            users[t_id]["is_vip"] = True; save_data()
-                            requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "✅ Sukses Upgrade ke VIP!"})
-                            send(t_id, "💎 **SELAMAT!** Akun Anda telah diupgrade menjadi VIP oleh Admin.")
-                            edit(chat_id, msg_id, f"✅ User `{t_id}` berhasil menjadi VIP.", admin_kb())
-
-                    elif data == "back_adm":
-                        edit(chat_id, msg_id, "👑 *ADMIN DASHBOARD*", admin_kb())
+                        users[t_id]["is_vip"] = True; save_data()
+                        send(t_id, "💎 **SELAMAT!** Admin telah mengaktifkan status VIP Anda."); edit(chat_id, msg_id, f"✅ ID `{t_id}` sukses jadi VIP!", admin_kb())
+                    elif data == "back_adm": edit(chat_id, msg_id, "👑 *ADMIN DASHBOARD*", admin_kb())
                     continue
 
                 if "message" not in upd: continue
                 msg = upd["message"]; chat_id = str(msg["chat"]["id"]); text = msg.get("text", "")
                 owner_access = is_owner(msg)
 
+                # Force Subscribe Check
                 if not owner_access and not is_member(chat_id, msg):
-                    kb = {"inline_keyboard": [[{"text": "📢 Join Channel", "url": CHANNEL_LINK}]]}
-                    send(chat_id, "⚠️ **AKSES TERKUNCI**", kb); continue
+                    kb = {"inline_keyboard": [[{"text": "📢 Join Channel", "url": CHANNEL_LINK}], [{"text": "🔄 Cek Status", "callback_data": "check_sub"}]]}
+                    send(chat_id, "⚠️ **AKSES TERKUNCI**\nSilakan bergabung ke channel untuk mulai memantau.", kb); continue
 
+                u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None, "is_vip": False})
+                if owner_access: u["is_vip"] = True
+
+                # Step 1: Forward Channel
+                if not u.get("target_channel"):
+                    if "forward_from_chat" in msg and msg["forward_from_chat"]["type"] == "channel":
+                        u["target_channel"] = msg["forward_from_chat"]["id"]
+                        u["join_date"] = datetime.datetime.now().strftime("%Y-%m-%d")
+                        save_data(); send(chat_id, "✅ **TERHUBUNG!**", main_menu(chat_id, owner_access))
+                    else: send(chat_id, "📖 Forward pesan channel pribadi Anda ke sini."); continue
+
+                # --- LOGIKA DASHBOARD ---
                 if text == "👑 ADMIN DASHBOARD" and owner_access:
                     send(chat_id, "👑 *ADMIN DASHBOARD*", admin_kb())
-                
                 elif text == "/start":
                     send(chat_id, "🤖 *X-ALLER SYSTEM ONLINE*", main_menu(chat_id, owner_access))
-
-                # (Tambahkan logika add account, list, remove dari versi sebelumnya di sini)
-                # ... (Logika add account tetap sama seperti script sebelumnya)
-
+                
+                # Tambahkan logika add/list/remove di sini (tetap sama)
+                elif text.lower() == "add account":
+                    u["state"] = "input"; send(chat_id, "👤 Username X (tanpa @):")
+                elif u.get("state") == "input":
+                    acc = text.replace("@", "").strip().lower()
+                    u["accounts"][acc] = {"last": None}; u["state"] = None; save_data()
+                    send(chat_id, f"✅ @{acc} dipantau.", main_menu(chat_id, owner_access))
         except: pass
         time.sleep(1)
 
