@@ -33,7 +33,8 @@ def is_owner(msg):
 def get_remaining_days(user_id):
     u = users.get(str(user_id))
     if not u or not u.get("join_date"): return 30
-    if u.get("is_vip"): return 999 
+    # Jika VIP, abaikan perhitungan sisa hari
+    if u.get("is_vip") is True: return 999 
     jd = datetime.datetime.strptime(u["join_date"], "%Y-%m-%d")
     rem = (jd + datetime.timedelta(days=30) - datetime.datetime.now()).days
     return max(0, rem)
@@ -44,17 +45,22 @@ def send(chat_id, text, markup=None):
     if markup: payload["reply_markup"] = json.dumps(markup)
     return requests.post(f"{API}/sendMessage", data=payload)
 
-def delete_msg(chat_id, msg_id):
-    return requests.post(f"{API}/deleteMessage", data={"chat_id": str(chat_id), "message_id": msg_id})
-
 # --- KEYBOARDS ---
 def main_menu(user_id, owner_access=False):
     u = users.setdefault(str(user_id), {"is_vip": False})
+    
     if owner_access:
         kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": "👑 ADMIN DASHBOARD"}]]
     else:
-        status = "💎 VIP" if u.get("is_vip") else f"⏳ Trial: {get_remaining_days(user_id)} Hari"
-        kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": f"👤 Status: {status}"}]]
+        # PERBAIKAN: Status VIP harus dicek paling pertama
+        if u.get("is_vip") is True:
+            status_text = "💎 VIP"
+        else:
+            days = get_remaining_days(user_id)
+            status_text = f"⏳ Trial: {days} Hari"
+            
+        kb = [[{"text": "add account"}], [{"text": "📋 List Accounts"}, {"text": "❌ Remove Account"}], [{"text": f"👤 Status: {status_text}"}]]
+    
     return {"keyboard": kb, "resize_keyboard": True}
 
 def admin_kb():
@@ -76,10 +82,10 @@ def bot_loop():
                 if "callback_query" in upd:
                     cq = upd["callback_query"]; chat_id = str(cq["message"]["chat"]["id"])
                     msg_id = cq["message"]["message_id"]; data = cq["data"]
-                    
                     if not is_owner(cq): continue
 
-                    if data == "close": requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
+                    if data == "close": 
+                        requests.post(f"{API}/deleteMessage", data={"chat_id": chat_id, "message_id": msg_id})
                     elif data.startswith("adm|"):
                         m_type = data.split("|")[1]
                         btn = []
@@ -101,7 +107,8 @@ def bot_loop():
                     elif data.startswith("upg|"):
                         t_id = data.split("|")[1]
                         users[t_id]["is_vip"] = True; save_data()
-                        send(t_id, "💎 **VIP AKTIF!**"); requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "✅ Sukses!"})
+                        send(t_id, "💎 **VIP AKTIF!**\nKetik /start untuk update menu.", main_menu(t_id, False))
+                        requests.post(f"{API}/answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "✅ Sukses!"})
                     elif data == "back_adm": 
                         requests.post(f"{API}/editMessageText", data={"chat_id": chat_id, "message_id": msg_id, "text": "👑 *ADMIN DASHBOARD*", "reply_markup": json.dumps(admin_kb()), "parse_mode": "Markdown"})
                     continue
@@ -113,7 +120,7 @@ def bot_loop():
                 u = users.setdefault(chat_id, {"accounts": {}, "target_channel": None, "is_vip": False})
                 if owner_access: u["is_vip"] = True
 
-                # Alur Forward Channel (Wajib untuk User agar bot tahu kemana harus kirim notif)
+                # Alur Forward Channel
                 if not u.get("target_channel"):
                     if "forward_from_chat" in msg and msg["forward_from_chat"]["type"] == "channel":
                         u["target_channel"] = msg["forward_from_chat"]["id"]
@@ -132,6 +139,9 @@ def bot_loop():
                     acc = text.replace("@", "").strip().lower()
                     u["accounts"][acc] = {"last": None}; u["state"] = None; save_data()
                     send(chat_id, f"✅ @{acc} dipantau.", main_menu(chat_id, owner_access))
+                elif text == "📋 List Accounts":
+                    accs = list(u["accounts"].keys())
+                    send(chat_id, "📋 *DAFTAR:*\n" + ("\n".join(accs) if accs else "Kosong."))
         except: pass
         time.sleep(1)
 
